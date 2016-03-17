@@ -1,4 +1,4 @@
-#include "Cnn.h"
+#include "cnn.h"
 
 int main(int argc,char* argv[])
 {
