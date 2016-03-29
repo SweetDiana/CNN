@@ -109,3 +109,63 @@ void Cnn::CnnSetup(vector<Mat>& vTrain_x,Mat& mTrain10_y)
 	randu(mFfW,Scalar::all(0),Scalar::all(1));
 	mFfW=(mFfW-0.5)*2*sqrt(6/(double(nOnum)+dFvnum));
 }
+
+void Cnn::CnnTrain(vector<Mat>& vTrain_x,Mat& mTrain10_y)
+{
+	//Train_x.size() 训练样本个数
+	double dNumbatches=vTrain_x.size()/nOpts_batchsize;
+	//相当于求余 就相当于取其小数部分，如果为0，就是整数
+	if((dNumbatches-(int)dNumbatches)>0.000001)
+	{
+		cout<<"numbatches not integer"<<endl;
+		return;
+	}
+
+	//打乱kk 1~10000,在for循环中初始化并随机化
+	vector<int> vKk(vTrain_x.size());
+
+	vector<Mat> batch_x(nOpts_batchsize);
+	Mat batch_y(mTrain10_y.rows,nOpts_batchsize,CV_64F);
+
+	for(int i=0;i<nOpts_numepochs;i++)
+	{
+		cout<<"epoch "<<(i+1)<<"/"<<nOpts_numepochs<<endl;
+		//返回[1, N]之间所有整数的一个随机的序列
+		//这样就相当于把原来的样本排列打乱，再挑出一些样本来训练
+		for(int j=0;j<vTrain_x.size();j++)
+			vKk[j]=j;
+		random_shuffle(vKk.begin(),vKk.end());
+
+		for(int l=0;l<(int)dNumbatches;l++)
+		{
+			//test
+			cout<<l<<endl;
+
+			for(int batch=l*nOpts_batchsize,m=0;batch<(l+1)*nOpts_batchsize,m<nOpts_batchsize;batch++,m++)
+			{
+				//取出打乱顺序后的batchsize个样本和对应的标签
+				batch_x[m]=vTrain_x[vKk[batch]];
+				mTrain10_y.col(vKk[batch]).copyTo(batch_y.col(m));
+			}
+			//在当前的网络权值和网络输入下计算网络的输出 Feedforward
+			CnnFf(batch_x);
+			//得到上面的网络输出后，通过对应的样本标签用bp算法来得到误差对网络权值
+			//（也就是那些卷积核的元素）的导数
+			CnnBp(batch_y);
+			//得到误差对权值的导数后，就通过权值更新方法去更新权值
+			CnnApplygrads();
+			if(vRL.size()==0)
+				vRL.push_back(dL);//代价函数值，也就是误差值
+			//保存历史的误差值
+			vRL.push_back(0.99*vRL.at(vRL.size()-1)+0.01*dL);
+			
+			//释放 vA
+			for(int layer=0;layer<vLayers.size();layer++)
+			{
+				vector<vector<Mat>>().swap(vLayers[layer].vA);
+				vector<vector<Mat>>().swap(vLayers[layer].vD);
+				vector<vector<Mat>>().swap(vLayers[layer].vDk);
+			}
+		}
+	}
+}
