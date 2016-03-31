@@ -169,3 +169,123 @@ void Cnn::CnnTrain(vector<Mat>& vTrain_x,Mat& mTrain10_y)
 		}
 	}
 }
+
+void Cnn::CnnFf(vector<Mat>& batch_x)
+{
+	int nLayers=vLayers.size();//层数
+	vLayers[0].vA.push_back(batch_x);//网络的第一层就是输入，但这里的输入包含了多个训练图像
+	//test
+	//cout<<vLayers[0].vA[0][0]<<endl;
+
+	int inputmaps=1;//输入层只有一个特征map，也就是原始的输入图像
+	vector<Mat> z(batch_x.size());
+	vector<Mat> temp_z(batch_x.size());
+	Mat mDest;		//conv2二维卷积后结果
+	Mat mTemp_ones;	// 2*2one矩阵/4
+	
+	for(int l=1;l<nLayers;l++)//for each layer
+	{
+		if(vLayers[l].cType=='c')//卷积层
+		{
+			//对每一个输入map，或者说我们需要用outputmaps个不同的卷积核去卷积图像
+			vLayers[l].vA.resize(vLayers[l].nOutputmaps);
+			for(int j=0;j<vLayers[l].nOutputmaps;j++)//for each output map
+			{
+				//create temp output map  
+                //对上一层的每一张特征map，卷积后的特征map的大小就是   
+                //（输入map宽 - 卷积核的宽 + 1）* （输入map高 - 卷积核高 + 1）  
+                //对于这里的层，因为每层都包含多张特征map，对应的索引保存在每层map的第三维  
+                //所以，这里的z保存的就是该层中所有的特征map了 
+			
+				for(int num=0;num<vLayers[l-1].vA[0].size();num++)
+					z[num]=Mat::zeros(vLayers[l-1].vA[0][0].rows-vLayers[l].nKernelsize+1,vLayers[l-1].vA[0][0].cols-vLayers[l].nKernelsize+1,CV_64F);
+
+				for(int i=0;i<inputmaps;i++)//for each input map
+				{
+					//convolve with corresponding kernel and add to temp output map  
+                    //将上一层的每一个特征map（也就是这层的输入map）与该层的卷积核进行卷积  
+                    //然后将对上一层特征map的所有结果加起来。也就是说，当前层的一张特征map，是  
+                    //用一种卷积核去卷积上一层中所有的特征map，然后所有特征map对应位置的卷积值的和  
+                    //另外，有些论文或者实际应用中，并不是与全部的特征map链接的，有可能只与其中的某几个连接
+					for(int num=0;num<vLayers[l-1].vA[i].size();num++)
+					{
+						Conv2(vLayers[l-1].vA[i][num],vLayers[l].vK[j][i],CONVOLUTION_VALID,mDest);
+						z[num]=z[num]+mDest;
+					}
+				}
+				//add bias, pass through nonlinearity
+				//加上对应位置的基b，然后再用sigmoid函数算出特征map中每个位置的激活值，作为该层输出特征map
+				for(int num=0;num<vLayers[l-1].vA[0].size();num++)
+				{
+					z[num]=z[num]+vLayers[l].vB[j];
+					exp(-z[num],z[num]);
+					z[num]=1/(1+z[num]);
+					vLayers[l].vA[j].push_back(z[num].clone());
+				}
+			}
+			//set number of input maps to this layers number of outputmaps
+			inputmaps=vLayers[l].nOutputmaps;
+		}
+		else if(vLayers[l].cType=='s')//下采样层
+		{
+			//要在scale=2的域上面执行mean pooling，那么可以卷积大小为2*2，每个元素都是1/4的卷积核
+			mTemp_ones=(Mat::ones(vLayers[l].nScale,vLayers[l].nScale,CV_64F))/(vLayers[l].nScale*vLayers[l].nScale);
+			vLayers[l].vA.resize(inputmaps);
+			for(int j=0;j<inputmaps;j++)
+			{
+				for(int num=0;num<vLayers[l-1].vA[j].size();num++)
+				{
+					Conv2(vLayers[l-1].vA[j][num],mTemp_ones,CONVOLUTION_VALID,mDest);
+					z[num]=mDest;
+				}
+				//因为conv2函数的默认卷积步长为1，而pooling操作的域是没有重叠的，所以对于上面的卷积结果  
+                //最终pooling的结果需要从上面得到的卷积结果中以scale=2为步长，跳着把mean pooling的值读出来
+				for(int i=0;i<batch_x.size();i++)
+				{
+					temp_z[i]=Mat::zeros((z[0].rows+1)/vLayers[l].nScale,(z[0].cols+1)/vLayers[l].nScale,CV_64F);
+					for(int row=0;row<temp_z[i].rows;row++)
+					{
+						for(int col=0;col<temp_z[i].cols;col++)
+						{
+							temp_z[i].at<double>(row,col)=z[i].at<double>(row*vLayers[l].nScale,col*vLayers[l].nScale);
+						}
+					}
+					vLayers[l].vA[j].push_back(temp_z[i].clone());
+				}
+			}
+		}
+	}
+	//test
+	//cout<<vLayers[1].vA[0][0]<<endl;
+	//cout<<vLayers[2].vA[0][0]<<endl;
+	//cout<<vLayers[3].vA[0][0]<<endl;
+	//cout<<vLayers[4].vA[0][0]<<endl;
+	//释放z和temp_z
+	vector<Mat>().swap(z);
+	vector<Mat>().swap(temp_z);
+
+	//concatenate all end layer feature maps into vector
+	//把最后一层得到的特征map拉成一条向量，作为最终提取到的特征向量
+	vector<Mat> temp(vLayers[nLayers-1].vA[0].size());
+	Mat temp_cols(vLayers[nLayers-1].vA[0][0].rows*vLayers[nLayers-1].vA[0][0].cols,vLayers[nLayers-1].vA[0].size(),CV_64F);
+	//mFv需要初始化为0
+	mFv=Mat::zeros(vLayers[nLayers-1].vA.size()*vLayers[nLayers-1].vA[0][0].rows*vLayers[nLayers-1].vA[0][0].cols,vLayers[nLayers-1].vA[0].size(),CV_64F);
+	for(int j=0;j<vLayers[nLayers-1].vA.size();j++)//最后一层的特征map的个数
+	{
+		//将所有的特征map拉成一条列向量。还有一维就是对应的样本索引。每个样本一列，每列为对应的特征向量
+		for(int i=0;i<vLayers[nLayers-1].vA[j].size();i++)//第j个特征map
+		{
+			temp[i]=vLayers[nLayers-1].vA[j][i];
+			temp[i].reshape(0,16).copyTo(temp_cols.col(i));
+		}
+		temp_cols.copyTo(mFv.rowRange(vLayers[nLayers-1].vA[0][0].rows*vLayers[nLayers-1].vA[0][0].cols*j,vLayers[nLayers-1].vA[0][0].rows*vLayers[nLayers-1].vA[0][0].cols*(j+1)));
+	}
+	//释放temp
+	vector<Mat>().swap(temp);
+
+	//feedforward into output perceptrons
+	//计算网络的最终输出值。sigmoid(W*X + b)，注意是同时计算了batchsize个样本的输出值
+	mO=mFfW*mFv+repeat(mFfb,1,mFv.cols);
+	exp(-mO,mO);
+	mO=1/(1+mO);
+}
