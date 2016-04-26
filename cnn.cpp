@@ -289,3 +289,131 @@ void Cnn::CnnFf(vector<Mat>& batch_x)
 	exp(-mO,mO);
 	mO=1/(1+mO);
 }
+
+void Cnn::CnnBp(Mat& batch_y)
+{
+	int nLayers=vLayers.size();//层数
+
+	//error
+	mE=mO-batch_y;
+	//loss function 代价函数是 均方误差 
+	dL=0.5*sum(mE.mul(mE))[0]/mE.cols;
+	
+	//backprop deltas 输出层的 灵敏度 或者 残差 
+	mOd=mE.mul(mO.mul(1-mO));
+	//残差 反向传播回 前一层 
+	mFvd=(mFfW.t())*mOd;
+	if(vLayers[nLayers-1].cType=='c')
+		mFvd=mFvd.mul(mFv.mul(1-mFv));
+
+	//最后一层特征map 指输出层的前一层
+	int nFvnum=vLayers[nLayers-1].vA[0][0].rows*vLayers[nLayers-1].vA[0][0].cols;
+	Mat mTemp_fvd;//16*50 
+	vLayers[nLayers-1].vD.resize(vLayers[nLayers-1].vA.size());
+	for(int j=0;j<vLayers[nLayers-1].vA.size();j++)//最后一层的特征map的个数
+	{
+		//fvd里面保存的是所有样本的特征向量,这里需要重新  
+        	//变换回来特征map的形式.d 保存的是 delta也就是 灵敏度 或者 残差
+		mTemp_fvd=mFvd.rowRange(j*nFvnum,(j+1)*nFvnum);
+		for(int i=0;i<mFvd.cols;i++)
+		{
+			vLayers[nLayers-1].vD[j].push_back(mTemp_fvd.col(i).clone().reshape(0,4));
+		}
+	}
+
+	//对于 输出层前面的层（与输出层计算残差的方式不同）
+	vector<Mat> temp_expand(nOpts_batchsize);
+	vector<Mat> z(nOpts_batchsize);
+	Mat mTemp_k,mDest;
+	for(int l=nLayers-2;l>=0;l--)
+	{
+		if(vLayers[l].cType=='c')
+		{
+			vLayers[l].vD.resize(vLayers[l].vA.size());
+			for(int j=0;j<vLayers[l].vA.size();j++)//该层特征map的个数
+			{
+				//net.layers{l}.d{j} 保存的是 第l层 的 第j个 map 的 灵敏度map
+				//也就是每个神经元节点的delta的值
+				for(int i=0;i<nOpts_batchsize;i++)
+				{
+					//expand的操作相当于对l+1层的灵敏度map进行上采样。
+					//然后前面的操作相当于对该层的输入a进行sigmoid求导
+					resize(vLayers[l+1].vD[j][i],temp_expand[i],Size(vLayers[l+1].vD[j][i].cols*vLayers[l+1].nScale,vLayers[l+1].vD[j][i].rows*vLayers[l+1].nScale),vLayers[l+1].nScale,vLayers[l+1].nScale,INTER_NEAREST);
+					temp_expand[i]=(vLayers[l].vA[j][i].mul(1-vLayers[l].vA[j][i])).mul(temp_expand[i])/(vLayers[l+1].nScale*vLayers[l+1].nScale);
+					vLayers[l].vD[j].push_back(temp_expand[i].clone());
+				}
+			}
+		}
+		else if(vLayers[l].cType=='s')
+		{
+			vLayers[l].vD.resize(vLayers[l].vA.size());
+			for(int i=0;i<vLayers[l].vA.size();i++)//第l层特征map的个数
+			{
+				for(int num=0;num<vLayers[l].vA[0].size();num++)
+					z[num]=Mat::zeros(vLayers[l].vA[0][0].rows,vLayers[l].vA[0][0].cols,CV_64F);
+				
+				for(int j=0;j<vLayers[l+1].vA.size();j++)//第l+1层特征map的个数
+				{
+					for(int num=0;num<vLayers[l+1].vD[j].size();num++)
+					{
+						flip(vLayers[l+1].vK[j][i],mTemp_k,-1);
+						Conv2(vLayers[l+1].vD[j][num],mTemp_k,CONVOLUTION_FULL,mDest);
+						z[num]=z[num]+mDest;
+					}
+				}
+				for(int num=0;num<z.size();num++)
+				{
+					vLayers[l].vD[i].push_back(z[num].clone());
+				}
+			}
+		}
+	}
+	//释放vector<Mat>
+	vector<Mat>().swap(temp_expand);
+	vector<Mat>().swap(z);
+
+	//calc gradients
+	//这里的 子采样 层没有参数，也没有  
+    	//激活函数，所以在子采样层是没有需要求解的参数的
+	Mat mTemp_a,mResult;
+	double dN_sum;
+	for(int l=1;l<nLayers;l++)
+	{
+		if(vLayers[l].cType=='c')
+		{
+			vLayers[l].vDb.resize(vLayers[l].vA.size());
+
+			for(int j=0;j<vLayers[l].vA.size();j++)
+			{
+				vLayers[l].vDk.push_back(vector<Mat>(vLayers[l-1].vA.size()));
+				for(int i=0;i<vLayers[l-1].vA.size();i++)
+				{
+					//dk 保存的是 误差对卷积核 的导数
+					mResult=Mat::zeros(vLayers[l-1].vA[i][0].rows-vLayers[l].vD[j][0].rows+1,vLayers[l-1].vA[i][0].cols-vLayers[l].vD[j][0].cols+1,CV_64F);
+					for(int num=0;num<vLayers[l-1].vA[i].size();num++)
+					{
+						flip(vLayers[l-1].vA[i][nOpts_batchsize-num-1],mTemp_a,-1);
+						Conv2(mTemp_a,vLayers[l].vD[j][nOpts_batchsize-num-1],CONVOLUTION_VALID,mDest);
+						mResult=mResult+mDest;
+					}
+					vLayers[l].vDk[j][i]=mResult/nOpts_batchsize;
+				}
+				//db 保存的是 误差对于bias基 的导数
+				dN_sum=0;
+				for(int i=0;i<vLayers[l].vD[j].size();i++)
+				{
+					dN_sum+=sum(vLayers[l].vD[j][i])[0];
+				}
+				vLayers[l].vDb[j]=(dN_sum/nOpts_batchsize);
+			}
+		}
+	}
+	
+	//最后一层perceptron的gradient的计算
+	mDffW=mOd*(mFv.t())/mOd.cols;
+	mDffb=Mat(mOd.rows,1,CV_64F);
+	for(int i=0;i<mOd.rows;i++)
+	{
+		mDffb.at<double>(i,0)=mean(mOd.row(i))[0];
+	}
+}
