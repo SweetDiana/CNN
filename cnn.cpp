@@ -417,3 +417,25 @@ void Cnn::CnnBp(Mat& batch_y)
 		mDffb.at<double>(i,0)=mean(mOd.row(i))[0];
 	}
 }
+
+void Cnn::CnnApplygrads()
+{
+	for(int l=1;l<vLayers.size();l++)
+	{
+		if(vLayers[l].cType=='c')
+		{
+			for(int j=0;j<vLayers[l].vA.size();j++)
+			{
+				for(int ii=0;ii<vLayers[l-1].vA.size();ii++)
+				{
+					//权值更新
+					vLayers[l].vK[j][ii]=vLayers[l].vK[j][ii]-nOpts_alpha*vLayers[l].vDk[j][ii];
+				}
+				vLayers[l].vB[j]=vLayers[l].vB[j]-nOpts_alpha*vLayers[l].vDb[j];
+			}
+		}
+	}
+
+	mFfW=mFfW-nOpts_alpha*mDffW;
+	mFfb=mFfb-nOpts_alpha*mDffb;
+}
