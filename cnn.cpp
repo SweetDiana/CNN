@@ -439,3 +439,34 @@ void Cnn::CnnApplygrads()
 	mFfW=mFfW-nOpts_alpha*mDffW;
 	mFfb=mFfb-nOpts_alpha*mDffb;
 }
+
+void Cnn::CnnTest(vector<Mat>& vTest_x,Mat& mTest_y)
+{
+	//maps
+	vector<Mat> vBatch(nOpts_batchsize);
+	for(int i=0;i<nOpts_batchsize;i++)
+	{
+		vBatch[i]=vTest_x[i];
+	}
+	CnnGetmaps(vBatch);
+
+	CnnFf(vTest_x);
+	int nBadNum=0;
+	for(int i=0;i<mO.cols;i++)
+	{
+		Mat mLabel = mO.col(i);
+		double minVal, maxVal;
+		Point minLoc, maxLoc;
+		minMaxLoc(mLabel, &minVal, &maxVal, &minLoc, &maxLoc);
+		//compare result with label
+		if(maxLoc.y!=(int)mTest_y.at<uchar>(0,i))
+			nBadNum++;
+	}
+
+	cout<<"Test "<<mTest_y.cols<<" images,failed "<<nBadNum<<endl;
+	cout<<"error rate= "<<double(nBadNum)/mTest_y.cols<<endl;
+	ofstream outFile("PftSalTime.txt",ofstream::out);
+	outFile<<"error rate:   "<<float(nBadNum)/mTest_y.cols<<endl;
+	//outFile.close();
+	return;
+}
