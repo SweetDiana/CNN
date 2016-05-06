@@ -448,7 +448,7 @@ void Cnn::CnnTest(vector<Mat>& vTest_x,Mat& mTest_y)
 	{
 		vBatch[i]=vTest_x[i];
 	}
-	CnnGetmaps(vBatch);
+	//CnnGetmaps(vBatch);
 
 	CnnFf(vTest_x);
 	int nBadNum=0;
