@@ -470,3 +470,22 @@ void Cnn::CnnTest(vector<Mat>& vTest_x,Mat& mTest_y)
 	//outFile.close();
 	return;
 }
+
+//change mat's row col page
+vector<Mat> Cnn::ReShape(Mat& File,int len,int page)
+{
+	vector<Mat> ReturnFile;
+	Mat Temp;
+	for(int i=0;i<page;i++)
+	{
+		//读取page内一行784个uchar数据到Temp
+		Temp=File.row(i);
+		//uchar 2 float
+		Temp.convertTo(Temp,CV_64F);
+		//归一化0~255到0~1
+		Temp=Temp/255;
+
+		ReturnFile.push_back(Temp.reshape(0,len));
+	}
+	return ReturnFile;
+}
